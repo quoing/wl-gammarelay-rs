@@ -16,6 +16,8 @@ pub struct DbusClient {
     gamma: f64,
     brightness: f64,
     prev_output: Option<String>,
+    device: Option<String>,
+    device_filter: Option<String>,
 }
 
 impl AsRawFd for DbusClient {
@@ -25,7 +27,7 @@ impl AsRawFd for DbusClient {
 }
 
 impl DbusClient {
-    pub fn new(format: String, server_running: bool) -> Result<Self> {
+    pub fn new(format: String, server_running: bool, device_filter: Option<String>) -> Result<Self> {
         let mut conn = DuplexConn::connect_to_bus(get_session_bus_path()?, true)?;
         conn.send_hello(Timeout::Infinite)?;
 
@@ -37,6 +39,7 @@ impl DbusClient {
         let mut temperature = 6500;
         let mut gamma = 1.0;
         let mut brightness = 1.0;
+        let mut device: Option<String> = None;
 
         if server_running {
             let mut t_done = false;
@@ -44,7 +47,7 @@ impl DbusClient {
             let mut b_done = false;
             let mut msg = MessageBuilder::new()
                 .call("Get")
-                .on("/")
+                .on(device_filter.clone().unwrap_or("/".to_string()))
                 .with_interface("org.freedesktop.DBus.Properties")
                 .at("rs.wl-gammarelay")
                 .build();
@@ -76,6 +79,7 @@ impl DbusClient {
                     b_done = true;
                 }
             }
+            device = msg.dynheader.object;
         }
 
         let mut this = Self {
@@ -85,6 +89,8 @@ impl DbusClient {
             gamma,
             brightness,
             prev_output: None,
+            device,
+            device_filter,
         };
 
         this.print();
@@ -109,20 +115,26 @@ impl DbusClient {
                 && msg.dynheader.interface.as_deref() == Some("org.freedesktop.DBus.Properties")
                 && msg.dynheader.member.as_deref() == Some("PropertiesChanged")
             {
-                let mut parser = msg.body.parser();
-                let iface = parser.get::<&str>()?;
-                if iface == "rs.wl.gammarelay" {
-                    let changed = parser.get::<HashMap<&str, UnVariant>>()?;
-                    let invalidated = parser.get::<Vec<&str>>()?;
-                    assert!(invalidated.is_empty());
-                    if let Some(v) = changed.get("Temperature") {
-                        self.temperature = v.get::<u16>()?;
-                    }
-                    if let Some(v) = changed.get("Gamma") {
-                        self.gamma = v.get::<f64>()?;
-                    }
-                    if let Some(v) = changed.get("Brightness") {
-                        self.brightness = v.get::<f64>()?;
+                self.device = msg.dynheader.object;
+                if self.device_filter.is_none() || self.device == self.device_filter {
+                    
+                    let mut parser = msg.body.parser();
+                    let iface = parser.get::<&str>()?;
+                    if iface == "rs.wl.gammarelay" {
+                        let changed = parser.get::<HashMap<&str, UnVariant>>()?;
+                        let invalidated = parser.get::<Vec<&str>>()?;
+                        assert!(invalidated.is_empty());
+                        //self.output = msg.dynheader.object;
+                        
+                        if let Some(v) = changed.get("Temperature") {
+                            self.temperature = v.get::<u16>()?;
+                        }
+                        if let Some(v) = changed.get("Gamma") {
+                            self.gamma = v.get::<f64>()?;
+                        }
+                        if let Some(v) = changed.get("Brightness") {
+                            self.brightness = v.get::<f64>()?;
+                        }
                     }
                     self.print();
                 }
@@ -136,7 +148,8 @@ impl DbusClient {
             .replace("{t}", &self.temperature.to_string())
             .replace("{g}", &format!("{:.2}", self.gamma))
             .replace("{b}", &format!("{:.2}", self.brightness))
-            .replace("{bp}", &format!("{:.0}", self.brightness * 100.));
+            .replace("{bp}", &format!("{:.0}", self.brightness * 100.))
+            .replace("{o}", &self.device.clone().unwrap_or("".to_string()));
         if self.prev_output.as_ref().is_none_or(|prev| *prev != output) {
             println!("{output}");
             self.prev_output = Some(output);

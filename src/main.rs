@@ -6,7 +6,7 @@ mod wayland;
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 
-use clap::{Parser, Subcommand};
+use clap::{Args, ArgAction, Parser, Subcommand};
 use wayland::WaylandEvent;
 
 use color::Color;
@@ -23,7 +23,19 @@ enum Command {
     /// Run the server
     Run,
     /// Watch updates
-    Watch { format: String },
+    Watch(WatchArgs)
+}
+
+#[derive(Debug,Args)]
+struct WatchArgs {
+    #[arg(short,long)]
+    device_filter : Option<String>,
+    #[arg(trailing_var_arg = true, action = ArgAction::Append, value_parser = collect_to_string)]
+    format: String,
+}
+
+fn collect_to_string(values: &str) -> Result<String, String> {
+    Ok(values.to_string())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -33,7 +45,7 @@ fn main() -> anyhow::Result<()> {
             let mut wayland = wayland::Wayland::new()?;
             let mut dbus_client = match command {
                 Command::Run => None,
-                Command::Watch { format } => Some(dbus_client::DbusClient::new(format, false)?),
+                Command::Watch(watch) => Some(dbus_client::DbusClient::new(watch.format, false, watch.device_filter)?),
             };
             let mut fds = [
                 pollin(dbus_server.as_raw_fd()),
@@ -67,8 +79,8 @@ fn main() -> anyhow::Result<()> {
         }
         None => match command {
             Command::Run => eprintln!("wl-gammarelay-rs is already running"),
-            Command::Watch { format } => {
-                let mut dbus_client = dbus_client::DbusClient::new(format, true)?;
+            Command::Watch(watch) => {
+                let mut dbus_client = dbus_client::DbusClient::new(watch.format, true, watch.device_filter)?;
                 dbus_client.run(true)?;
             }
         },
